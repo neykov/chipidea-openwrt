@@ -38,9 +38,11 @@ endef
 
 define KernelPackage/usb-gadget
   TITLE:=USB Gadget support
-  KCONFIG:=CONFIG_USB_GADGET
-  FILES:=
-  AUTOLOAD:=
+  KCONFIG:=CONFIG_USB_GADGET CONFIG_USB_COMPOSITE
+  FILES:= \
+	$(LINUX_DIR)/drivers/usb/gadget/udc-core.ko \
+	$(LINUX_DIR)/drivers/usb/gadget/libcomposite.ko
+  AUTOLOAD:=$(call AutoLoad,21,udc-core libcomposite)
   DEPENDS:=@USB_GADGET_SUPPORT
   $(call AddDepends/usb)
 endef
@@ -52,23 +54,110 @@ endef
 $(eval $(call KernelPackage,usb-gadget))
 
 
-define KernelPackage/usb-eth-gadget
+define AddDepends/usb-gadget
+  SUBMENU:=$(USB_MENU)
+  DEPENDS+=+kmod-usb-gadget $(1)
+endef
+
+define KernelPackage/usb-gadget-zero
+  TITLE:=USB Zero Gadget
+  KCONFIG:=CONFIG_USB_ZERO
+  FILES:=$(LINUX_DIR)/drivers/usb/gadget/g_zero.ko
+  $(call AddDepends/usb-gadget)
+endef
+
+$(eval $(call KernelPackage,usb-gadget-zero))
+
+define KernelPackage/usb-gadget-zero/description
+  Kernel support for USB Zero Gadget.
+endef
+
+
+define KernelPackage/usb-gadget-eth
   TITLE:=USB Ethernet Gadget support
   KCONFIG:= \
 	CONFIG_USB_ETH \
 	CONFIG_USB_ETH_RNDIS=y \
 	CONFIG_USB_ETH_EEM=y
-  DEPENDS:=+kmod-usb-gadget
   FILES:=$(LINUX_DIR)/drivers/usb/gadget/g_ether.ko
-  AUTOLOAD:=$(call AutoLoad,52,g_ether)
-  $(call AddDepends/usb)
+  $(call AddDepends/usb-gadget)
 endef
 
-define KernelPackage/usb-eth-gadget/description
- Kernel support for USB Ethernet Gadget
+define KernelPackage/usb-gadget-eth/description
+  Kernel support for USB Ethernet Gadget.
 endef
 
-$(eval $(call KernelPackage,usb-eth-gadget))
+$(eval $(call KernelPackage,usb-gadget-eth))
+
+
+define KernelPackage/usb-gadget-serial
+  TITLE:=USB Serial Gadget
+  KCONFIG:=CONFIG_USB_G_SERIAL
+  FILES:=$(LINUX_DIR)/drivers/usb/gadget/g_serial.ko
+  $(call AddDepends/usb-gadget)
+endef
+
+define KernelPackage/usb-gadget-serial/description
+  Kernel support for USB Serial Gadget (with CDC ACM and CDC OBEX support).
+endef
+
+$(eval $(call KernelPackage,usb-gadget-serial))
+
+
+define KernelPackage/usb-gadget-mass-storage
+  TITLE:=USB Mass storage Gadget
+  KCONFIG:=CONFIG_USB_MASS_STORAGE
+  FILES:=$(LINUX_DIR)/drivers/usb/gadget/g_mass_storage.ko
+  $(call AddDepends/usb-gadget)
+endef
+
+define KernelPackage/usb-gadget-mass-storage/description
+  Kernel support for USB Mass Storage Gadget.
+endef
+
+$(eval $(call KernelPackage,usb-gadget-mass-storage))
+
+
+define KernelPackage/usb-gadget-serial-ethernet
+  TITLE:=Serial and Ethernet Gadget
+  KCONFIG:=CONFIG_USB_CDC_COMPOSITE
+  FILES:=$(LINUX_DIR)/drivers/usb/gadget/g_cdc.ko
+  $(call AddDepends/usb-gadget)
+endef
+
+define KernelPackage/usb-gadget-serial-ethernet/description
+  Kernel support for USB CDC Composite Gadget (Ethernet and Serial).
+endef
+
+$(eval $(call KernelPackage,usb-gadget-serial-ethernet))
+
+
+define KernelPackage/usb-gadget-serial-mass-storage
+  TITLE:=Serial and Mass storage Gadget
+  KCONFIG:=CONFIG_USB_G_ACM_MS
+  FILES:=$(LINUX_DIR)/drivers/usb/gadget/g_acm_ms.ko
+  $(call AddDepends/usb-gadget)
+endef
+
+define KernelPackage/usb-gadget-serial-mass-storage/description
+  Kernel support for USB CDC Composite Gadget (Serial and Mass storage).
+endef
+
+$(eval $(call KernelPackage,usb-gadget-serial-mass-storage))
+
+
+define KernelPackage/usb-gadget-multi
+  TITLE:=RNDIS Ethernet, Mass storage and Serial
+  KCONFIG:=CONFIG_USB_G_MULTI CONFIG_USB_G_MULTI_RNDIS=y CONFIG_USB_G_MULTI_CDC=n
+  FILES:=$(LINUX_DIR)/drivers/usb/gadget/g_multi.ko
+  $(call AddDepends/usb-gadget)
+endef
+
+define KernelPackage/usb-gadget-multi/description
+  Kernel support for USB CDC Composite Gadget (RNDIS Ethernet, Serial and Mass storage).
+endef
+
+$(eval $(call KernelPackage,usb-gadget-multi))
 
 
 define KernelPackage/usb-uhci
@@ -1045,13 +1134,14 @@ define KernelPackage/usb-chipidea
   KCONFIG:=\
 	CONFIG_USB_CHIPIDEA \
 	CONFIG_USB_CHIPIDEA_HOST=y \
-	CONFIG_USB_CHIPIDEA_UDC=n \
-	CONFIG_USB_CHIPIDEA_DEBUG=y
+	CONFIG_USB_CHIPIDEA_UDC=y \
+	CONFIG_USB_CHIPIDEA_DEBUG=n
   FILES:=\
 	$(LINUX_DIR)/drivers/usb/chipidea/ci_hdrc.ko \
+	$(LINUX_DIR)/drivers/usb/chipidea/ci13xxx_ar933x.ko \
 	$(if $(CONFIG_OF_DEVICE),$(LINUX_DIR)/drivers/usb/chipidea/ci13xxx_imx.ko) \
 	$(if $(CONFIG_OF_DEVICE),$(LINUX_DIR)/drivers/usb/chipidea/usbmisc_imx$(if $(call kernel_patchver_le,3.9),6q).ko)
-  AUTOLOAD:=$(call AutoLoad,51,ci_hdrc $(if $(CONFIG_OF_DEVICE),ci13xxx_imx usbmisc_imx$(if $(call kernel_patchver_le,3.9),6q)),1)
+  AUTOLOAD:=$(call AutoLoad,22,udc-core)
   $(call AddDepends/usb)
 endef
   
