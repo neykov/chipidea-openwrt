@@ -1141,7 +1141,7 @@ define KernelPackage/usb-chipidea
 	$(LINUX_DIR)/drivers/usb/chipidea/ci13xxx_ar933x.ko \
 	$(if $(CONFIG_OF_DEVICE),$(LINUX_DIR)/drivers/usb/chipidea/ci13xxx_imx.ko) \
 	$(if $(CONFIG_OF_DEVICE),$(LINUX_DIR)/drivers/usb/chipidea/usbmisc_imx$(if $(call kernel_patchver_le,3.9),6q).ko)
-  AUTOLOAD:=$(call AutoLoad,22,udc-core)
+  AUTOLOAD:=$(call AutoLoad,22,ci_hdrc ci13xxx_ar933x)
   $(call AddDepends/usb)
 endef
   
