@@ -1,0 +1,381 @@
+--- a/arch/mips/include/asm/mach-ath79/ar71xx_regs.h
++++ b/arch/mips/include/asm/mach-ath79/ar71xx_regs.h
+@@ -485,6 +485,7 @@
+ 
+ #define AR933X_BOOTSTRAP_MDIO_GPIO_EN	BIT(18)
+ #define AR933X_BOOTSTRAP_EEPBUSY	BIT(4)
++#define AR933X_BOOTSTRAP_USB_MODE_HOST	BIT(3)
+ #define AR933X_BOOTSTRAP_REF_CLK_40	BIT(0)
+ 
+ #define AR934X_BOOTSTRAP_SW_OPTION8	BIT(23)
+@@ -505,6 +506,8 @@
+ 
+ #define QCA955X_BOOTSTRAP_REF_CLK_40	BIT(4)
+ 
++#define AR933X_USB_CONFIG_HOST_ONLY	BIT(8)
++
+ #define AR934X_PCIE_WMAC_INT_WMAC_MISC		BIT(0)
+ #define AR934X_PCIE_WMAC_INT_WMAC_TX		BIT(1)
+ #define AR934X_PCIE_WMAC_INT_WMAC_RXLP		BIT(2)
+--- a/drivers/usb/chipidea/Makefile
++++ b/drivers/usb/chipidea/Makefile
+@@ -10,6 +10,7 @@ ci_hdrc-$(CONFIG_USB_CHIPIDEA_DEBUG)	+=
+ # Glue/Bridge layers go here
+ 
+ obj-$(CONFIG_USB_CHIPIDEA)	+= ci13xxx_msm.o
++obj-$(CONFIG_USB_CHIPIDEA)	+= ci13xxx_ar933x.o
+ 
+ # PCI doesn't provide stubs, need to check
+ ifneq ($(CONFIG_PCI),)
+--- /dev/null
++++ b/drivers/usb/chipidea/ci13xxx_ar933x.c
+@@ -0,0 +1,73 @@
++/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 and
++ * only version 2 as published by the Free Software Foundation.
++ */
++
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/pm_runtime.h>
++#include <linux/usb/ulpi.h>
++#include <linux/usb/gadget.h>
++#include <linux/usb/chipidea.h>
++#include <asm/mach-ath79/ath79.h>
++#include <asm/mach-ath79/ar71xx_regs.h>
++
++#include "ci.h"
++
++static struct ci13xxx_platform_data ci13xxx_ar933x_platdata = {
++	.name			= "ci13xxx_ar933x",
++	.flags			= 0,
++	.capoffset		= DEF_CAPOFFSET
++};
++
++static int __devinit ci13xxx_ar933x_probe(struct platform_device *pdev)
++{
++	u32 bootstrap;
++	struct platform_device *plat_ci;
++
++	dev_dbg(&pdev->dev, "ci13xxx_ar933x_probe\n");
++
++	bootstrap = ath79_reset_rr(AR933X_RESET_REG_BOOTSTRAP);
++	if (bootstrap & AR933X_BOOTSTRAP_USB_MODE_HOST)
++		ci13xxx_ar933x_platdata.flags = CI13XXX_FORCE_HOST_MODE;
++	else
++		ci13xxx_ar933x_platdata.flags = CI13XXX_FORCE_DEVICE_MODE;
++
++	plat_ci = ci13xxx_add_device(&pdev->dev,
++				pdev->resource, pdev->num_resources,
++				&ci13xxx_ar933x_platdata);
++	if (IS_ERR(plat_ci)) {
++		dev_err(&pdev->dev, "ci13xxx_add_device failed!\n");
++		return PTR_ERR(plat_ci);
++	}
++
++	platform_set_drvdata(pdev, plat_ci);
++
++	pm_runtime_no_callbacks(&pdev->dev);
++	pm_runtime_enable(&pdev->dev);
++
++	return 0;
++}
++
++static int __devexit ci13xxx_ar933x_remove(struct platform_device *pdev)
++{
++	struct platform_device *plat_ci = platform_get_drvdata(pdev);
++
++	pm_runtime_disable(&pdev->dev);
++	ci13xxx_remove_device(plat_ci);
++
++	return 0;
++}
++
++static struct platform_driver ci13xxx_ar933x_driver = {
++	.probe = ci13xxx_ar933x_probe,
++	.remove = __devexit_p(ci13xxx_ar933x_remove),
++	.driver = { .name = "ehci-platform", },
++};
++
++module_platform_driver(ci13xxx_ar933x_driver);
++
++MODULE_ALIAS("platform:ar933x_hsusb");
++MODULE_LICENSE("GPL v2");
+--- a/drivers/usb/chipidea/core.c
++++ b/drivers/usb/chipidea/core.c
+@@ -181,7 +181,7 @@ static int hw_device_init(struct ci13xxx
+ 
+ 	ci->hw_bank.cap = ci->hw_bank.abs;
+ 	ci->hw_bank.cap += ci->platdata->capoffset;
+-	ci->hw_bank.op = ci->hw_bank.cap + ioread8(ci->hw_bank.cap);
++	ci->hw_bank.op = ci->hw_bank.cap + (ioread32(ci->hw_bank.cap) & 0xFF);
+ 
+ 	hw_alloc_regmap(ci, false);
+ 	reg = hw_read(ci, CAP_HCCPARAMS, HCCPARAMS_LEN) >>
+@@ -398,6 +398,8 @@ static int __devinit ci_hdrc_probe(struc
+ 	struct resource	*res;
+ 	void __iomem	*base;
+ 	int		ret;
++	bool force_host_mode;
++	bool force_device_mode;
+ 
+ 	if (!dev->platform_data) {
+ 		dev_err(dev, "platform data missing\n");
+@@ -411,7 +413,7 @@ static int __devinit ci_hdrc_probe(struc
+ 	}
+ 
+ 	base = devm_request_and_ioremap(dev, res);
+-	if (!res) {
++	if (!base) {
+ 		dev_err(dev, "can't request and ioremap resource\n");
+ 		return -ENOMEM;
+ 	}
+@@ -459,21 +461,31 @@ static int __devinit ci_hdrc_probe(struc
+ 	if (ret)
+ 		dev_info(dev, "doesn't support gadget\n");
+ 
+-	if (!ci->roles[CI_ROLE_HOST] && !ci->roles[CI_ROLE_GADGET]) {
++	force_host_mode = ci->platdata->flags & CI13XXX_FORCE_HOST_MODE;
++	force_device_mode = ci->platdata->flags & CI13XXX_FORCE_DEVICE_MODE;
++	if ((!ci->roles[CI_ROLE_HOST] && !ci->roles[CI_ROLE_GADGET]) ||
++			(force_host_mode && !ci->roles[CI_ROLE_HOST]) ||
++			(force_device_mode && !ci->roles[CI_ROLE_GADGET])) {
+ 		dev_err(dev, "no supported roles\n");
+ 		ret = -ENODEV;
+ 		goto rm_wq;
+ 	}
+ 
+-	if (ci->roles[CI_ROLE_HOST] && ci->roles[CI_ROLE_GADGET]) {
++	if (!force_host_mode && !force_device_mode &&
++			ci->roles[CI_ROLE_HOST] && ci->roles[CI_ROLE_GADGET]) {
+ 		ci->is_otg = true;
+ 		/* ID pin needs 1ms debouce time, we delay 2ms for safe */
+ 		mdelay(2);
+ 		ci->role = ci_otg_role(ci);
+ 	} else {
+-		ci->role = ci->roles[CI_ROLE_HOST]
+-			? CI_ROLE_HOST
+-			: CI_ROLE_GADGET;
++		if (force_host_mode)
++			ci->role = CI_ROLE_HOST;
++		else if (force_device_mode)
++			ci->role = CI_ROLE_GADGET;
++		else
++			ci->role = ci->roles[CI_ROLE_HOST]
++				? CI_ROLE_HOST
++				: CI_ROLE_GADGET;
+ 	}
+ 
+ 	ret = ci_role_start(ci, ci->role);
+--- a/drivers/usb/chipidea/udc.c
++++ b/drivers/usb/chipidea/udc.c
+@@ -432,10 +432,10 @@ static int _hardware_enqueue(struct ci13
+ 			return -ENOMEM;
+ 
+ 		memset(mReq->zptr, 0, sizeof(*mReq->zptr));
+-		mReq->zptr->next    = TD_TERMINATE;
+-		mReq->zptr->token   = TD_STATUS_ACTIVE;
++		mReq->zptr->next    = cpu_to_le32(TD_TERMINATE);
++		mReq->zptr->token   = cpu_to_le32(TD_STATUS_ACTIVE);
+ 		if (!mReq->req.no_interrupt)
+-			mReq->zptr->token   |= TD_IOC;
++			mReq->zptr->token   |= cpu_to_le32(TD_IOC);
+ 	}
+ 	ret = usb_gadget_map_request(&ci->gadget, &mReq->req, mEp->dir);
+ 	if (ret)
+@@ -446,32 +446,35 @@ static int _hardware_enqueue(struct ci13
+ 	 * TODO - handle requests which spawns into several TDs
+ 	 */
+ 	memset(mReq->ptr, 0, sizeof(*mReq->ptr));
+-	mReq->ptr->token    = length << ffs_nr(TD_TOTAL_BYTES);
+-	mReq->ptr->token   &= TD_TOTAL_BYTES;
+-	mReq->ptr->token   |= TD_STATUS_ACTIVE;
++	mReq->ptr->token    = cpu_to_le32(length << ffs_nr(TD_TOTAL_BYTES));
++	mReq->ptr->token   &= cpu_to_le32(TD_TOTAL_BYTES);
++	mReq->ptr->token   |= cpu_to_le32(TD_STATUS_ACTIVE);
+ 	if (mReq->zptr) {
+-		mReq->ptr->next    = mReq->zdma;
++		mReq->ptr->next    = cpu_to_le32(mReq->zdma);
+ 	} else {
+-		mReq->ptr->next    = TD_TERMINATE;
++		mReq->ptr->next    = cpu_to_le32(TD_TERMINATE);
+ 		if (!mReq->req.no_interrupt)
+-			mReq->ptr->token  |= TD_IOC;
++			mReq->ptr->token  |= cpu_to_le32(TD_IOC);
++	}
++	mReq->ptr->page[0]  = cpu_to_le32(mReq->req.dma);
++	for (i = 1; i < 5; i++) {
++		u32 page = mReq->req.dma + i * CI13XXX_PAGE_SIZE;
++		page &= ~TD_RESERVED_MASK;
++		mReq->ptr->page[i] = cpu_to_le32(page);
+ 	}
+-	mReq->ptr->page[0]  = mReq->req.dma;
+-	for (i = 1; i < 5; i++)
+-		mReq->ptr->page[i] =
+-			(mReq->req.dma + i * CI13XXX_PAGE_SIZE) & ~TD_RESERVED_MASK;
+ 
+ 	if (!list_empty(&mEp->qh.queue)) {
+ 		struct ci13xxx_req *mReqPrev;
+ 		int n = hw_ep_bit(mEp->num, mEp->dir);
+ 		int tmp_stat;
++		u32 next = mReq->dma & TD_ADDR_MASK;
+ 
+ 		mReqPrev = list_entry(mEp->qh.queue.prev,
+ 				struct ci13xxx_req, queue);
+ 		if (mReqPrev->zptr)
+-			mReqPrev->zptr->next = mReq->dma & TD_ADDR_MASK;
++			mReqPrev->zptr->next = cpu_to_le32(next);
+ 		else
+-			mReqPrev->ptr->next = mReq->dma & TD_ADDR_MASK;
++			mReqPrev->ptr->next = cpu_to_le32(next);
+ 		wmb();
+ 		if (hw_read(ci, OP_ENDPTPRIME, BIT(n)))
+ 			goto done;
+@@ -485,9 +488,9 @@ static int _hardware_enqueue(struct ci13
+ 	}
+ 
+ 	/*  QH configuration */
+-	mEp->qh.ptr->td.next   = mReq->dma;    /* TERMINATE = 0 */
+-	mEp->qh.ptr->td.token &= ~TD_STATUS;   /* clear status */
+-	mEp->qh.ptr->cap |=  QH_ZLT;
++	mEp->qh.ptr->td.next   = cpu_to_le32(mReq->dma);    /* TERMINATE = 0 */
++	mEp->qh.ptr->td.token &= cpu_to_le32(~TD_STATUS);   /* clear status */
++	mEp->qh.ptr->cap |=  cpu_to_le32(QH_ZLT);
+ 
+ 	wmb();   /* synchronize before ep prime */
+ 
+@@ -509,11 +512,11 @@ static int _hardware_dequeue(struct ci13
+ 	if (mReq->req.status != -EALREADY)
+ 		return -EINVAL;
+ 
+-	if ((TD_STATUS_ACTIVE & mReq->ptr->token) != 0)
++	if ((cpu_to_le32(TD_STATUS_ACTIVE) & mReq->ptr->token) != 0)
+ 		return -EBUSY;
+ 
+ 	if (mReq->zptr) {
+-		if ((TD_STATUS_ACTIVE & mReq->zptr->token) != 0)
++		if ((cpu_to_le32(TD_STATUS_ACTIVE) & mReq->zptr->token) != 0)
+ 			return -EBUSY;
+ 		dma_pool_free(mEp->td_pool, mReq->zptr, mReq->zdma);
+ 		mReq->zptr = NULL;
+@@ -523,7 +526,7 @@ static int _hardware_dequeue(struct ci13
+ 
+ 	usb_gadget_unmap_request(&mEp->ci->gadget, &mReq->req, mEp->dir);
+ 
+-	mReq->req.status = mReq->ptr->token & TD_STATUS;
++	mReq->req.status = le32_to_cpu(mReq->ptr->token) & TD_STATUS;
+ 	if ((TD_STATUS_HALTED & mReq->req.status) != 0)
+ 		mReq->req.status = -1;
+ 	else if ((TD_STATUS_DT_ERR & mReq->req.status) != 0)
+@@ -531,7 +534,7 @@ static int _hardware_dequeue(struct ci13
+ 	else if ((TD_STATUS_TR_ERR & mReq->req.status) != 0)
+ 		mReq->req.status = -1;
+ 
+-	mReq->req.actual   = mReq->ptr->token & TD_TOTAL_BYTES;
++	mReq->req.actual   = le32_to_cpu(mReq->ptr->token) & TD_TOTAL_BYTES;
+ 	mReq->req.actual >>= ffs_nr(TD_TOTAL_BYTES);
+ 	mReq->req.actual   = mReq->req.length - mReq->req.actual;
+ 	mReq->req.actual   = mReq->req.status ? 0 : mReq->req.actual;
+@@ -801,7 +804,7 @@ __acquires(mEp->lock)
+ 		if (retval < 0)
+ 			break;
+ 		list_del_init(&mReq->queue);
+-		dbg_done(_usb_addr(mEp), mReq->ptr->token, retval);
++		dbg_done(_usb_addr(mEp), le32_to_cpu(mReq->ptr->token), retval);
+ 		if (mReq->req.complete != NULL) {
+ 			spin_unlock(mEp->lock);
+ 			if ((mEp->type == USB_ENDPOINT_XFER_CONTROL) &&
+@@ -1045,15 +1048,15 @@ static int ep_enable(struct usb_ep *ep,
+ 	mEp->qh.ptr->cap = 0;
+ 
+ 	if (mEp->type == USB_ENDPOINT_XFER_CONTROL)
+-		mEp->qh.ptr->cap |=  QH_IOS;
++		mEp->qh.ptr->cap |=  cpu_to_le32(QH_IOS);
+ 	else if (mEp->type == USB_ENDPOINT_XFER_ISOC)
+-		mEp->qh.ptr->cap &= ~QH_MULT;
++		mEp->qh.ptr->cap &= cpu_to_le32(~QH_MULT);
+ 	else
+-		mEp->qh.ptr->cap &= ~QH_ZLT;
++		mEp->qh.ptr->cap &= cpu_to_le32(~QH_ZLT);
+ 
+ 	mEp->qh.ptr->cap |=
+-		(mEp->ep.maxpacket << ffs_nr(QH_MAX_PKT)) & QH_MAX_PKT;
+-	mEp->qh.ptr->td.next |= TD_TERMINATE;   /* needed? */
++		cpu_to_le32((mEp->ep.maxpacket << ffs_nr(QH_MAX_PKT)) & QH_MAX_PKT);
++	mEp->qh.ptr->td.next |= cpu_to_le32(TD_TERMINATE);   /* needed? */
+ 
+ 	/*
+ 	 * Enable endpoints in the HW other than ep0 as ep0
+@@ -1392,7 +1395,10 @@ static int ci13xxx_vbus_session(struct u
+ 		if (is_active) {
+ 			pm_runtime_get_sync(&_gadget->dev);
+ 			hw_device_reset(ci, USBMODE_CM_DC);
+-			hw_enable_vbus_intr(ci);
++
++			if (ci->is_otg)
++				hw_enable_vbus_intr(ci);
++
+ 			hw_device_state(ci, ci->ep0out->qh.dma);
+ 		} else {
+ 			hw_device_state(ci, 0);
+@@ -1569,7 +1575,8 @@ static int ci13xxx_start(struct usb_gadg
+ 		if (ci->vbus_active) {
+ 			if (ci->platdata->flags & CI13XXX_REGS_SHARED) {
+ 				hw_device_reset(ci, USBMODE_CM_DC);
+-				hw_enable_vbus_intr(ci);
++				if (ci->is_otg)
++					hw_enable_vbus_intr(ci);
+ 			}
+ 		} else {
+ 			pm_runtime_put_sync(&ci->gadget.dev);
+@@ -1677,11 +1684,13 @@ static irqreturn_t udc_irq(struct ci13xx
+ 		retval = IRQ_NONE;
+ 	}
+ 
+-	intr = hw_read(ci, OP_OTGSC, ~0);
+-	hw_write(ci, OP_OTGSC, ~0, intr);
++	if (ci->is_otg) {
++		intr = hw_read(ci, OP_OTGSC, ~0);
++		hw_write(ci, OP_OTGSC, ~0, intr);
+ 
+-	if (intr & (OTGSC_AVVIE & OTGSC_AVVIS))
+-		queue_work(ci->wq, &ci->vbus_work);
++		if (intr & (OTGSC_AVVIE & OTGSC_AVVIS))
++			queue_work(ci->wq, &ci->vbus_work);
++	}
+ 
+ 	spin_unlock(&ci->lock);
+ 
+@@ -1758,7 +1767,8 @@ static int udc_start(struct ci13xxx *ci)
+ 		retval = hw_device_reset(ci, USBMODE_CM_DC);
+ 		if (retval)
+ 			goto put_transceiver;
+-		hw_enable_vbus_intr(ci);
++		if (ci->is_otg)
++			hw_enable_vbus_intr(ci);
+ 	}
+ 
+ 	retval = device_register(&ci->gadget.dev);
+@@ -1821,7 +1831,8 @@ static void udc_stop(struct ci13xxx *ci)
+ 	if (ci == NULL)
+ 		return;
+ 
+-	hw_disable_vbus_intr(ci);
++	if (ci->is_otg)
++		hw_disable_vbus_intr(ci);
+ 	cancel_work_sync(&ci->vbus_work);
+ 
+ 	usb_del_gadget_udc(&ci->gadget);
+--- a/include/linux/usb/chipidea.h
++++ b/include/linux/usb/chipidea.h
+@@ -19,6 +19,8 @@ struct ci13xxx_platform_data {
+ #define CI13XXX_REQUIRE_TRANSCEIVER	BIT(1)
+ #define CI13XXX_PULLUP_ON_VBUS		BIT(2)
+ #define CI13XXX_DISABLE_STREAMING	BIT(3)
++#define CI13XXX_FORCE_HOST_MODE		BIT(5)
++#define CI13XXX_FORCE_DEVICE_MODE	BIT(6)
+ 
+ #define CI13XXX_CONTROLLER_RESET_EVENT		0
+ #define CI13XXX_CONTROLLER_STOPPED_EVENT	1
