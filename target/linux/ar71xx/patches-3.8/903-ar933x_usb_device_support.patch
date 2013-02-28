@@ -1,35 +1,160 @@
+diff --git a/arch/mips/ath79/dev-usb.c b/arch/mips/ath79/dev-usb.c
+index bd2bc10..edb1983 100644
+--- a/arch/mips/ath79/dev-usb.c
++++ b/arch/mips/ath79/dev-usb.c
+@@ -22,6 +22,7 @@
+ 
+ #include <asm/mach-ath79/ath79.h>
+ #include <asm/mach-ath79/ar71xx_regs.h>
++#include <asm/mach-ath79/ar933x_chipidea_platform.h>
+ #include "common.h"
+ #include "dev-usb.h"
+ 
+@@ -68,6 +69,20 @@ static struct platform_device ath79_ehci_device = {
+ 	},
+ };
+ 
++static struct ar933x_chipidea_platform_data ar933x_chipidea_data = {
++};
++
++static struct platform_device ar933x_chipidea_device = {
++	.name		= "ar933x-chipidea",
++	.id		= -1,
++	.resource	= ath79_ehci_resources,
++	.num_resources	= ARRAY_SIZE(ath79_ehci_resources),
++	.dev = {
++		.dma_mask		= &ath79_ehci_dmamask,
++		.coherent_dma_mask	= DMA_BIT_MASK(32),
++	},
++};
++
+ static void __init ath79_usb_init_resource(struct resource res[2],
+ 					   unsigned long base,
+ 					   unsigned long size,
+@@ -174,8 +189,32 @@ static void __init ar913x_usb_setup(void)
+ 	platform_device_register(&ath79_ehci_device);
+ }
+ 
++static void __init ar933x_usb_setup_ctrl_config(void)
++{
++	void __iomem *usb_ctrl_base, *usb_config_reg;
++	u32 usb_config;
++
++	usb_ctrl_base = ioremap(AR71XX_USB_CTRL_BASE, AR71XX_USB_CTRL_SIZE);
++	usb_config_reg = usb_ctrl_base + AR71XX_USB_CTRL_REG_CONFIG;
++	usb_config = __raw_readl(usb_config_reg);
++	usb_config &= ~AR933X_USB_CONFIG_HOST_ONLY;
++	__raw_writel(usb_config, usb_config_reg);
++	iounmap(usb_ctrl_base);
++}
++
+ static void __init ar933x_usb_setup(void)
+ {
++	u32 bootstrap;
++	enum dr_mode dr_mode;
++
++	bootstrap = ath79_reset_rr(AR933X_RESET_REG_BOOTSTRAP);
++	if (bootstrap & AR933X_BOOTSTRAP_USB_MODE_HOST) {
++		dr_mode = USB_DR_MODE_HOST;
++	} else {
++		dr_mode = USB_DR_MODE_PERIPHERIAL;
++		ar933x_usb_setup_ctrl_config();
++	}
++
+ 	ath79_device_reset_set(AR933X_RESET_USBSUS_OVERRIDE);
+ 	mdelay(10);
+ 
+@@ -187,8 +226,13 @@ static void __init ar933x_usb_setup(void)
+ 
+ 	ath79_usb_init_resource(ath79_ehci_resources, AR933X_EHCI_BASE,
+ 				AR933X_EHCI_SIZE, ATH79_CPU_IRQ_USB);
++
+ 	ath79_ehci_device.dev.platform_data = &ath79_ehci_pdata_v2;
+ 	platform_device_register(&ath79_ehci_device);
++
++	ar933x_chipidea_data.dr_mode = dr_mode;
++	ar933x_chipidea_device.dev.platform_data = &ar933x_chipidea_data;
++	platform_device_register(&ar933x_chipidea_device);
+ }
+ 
+ static void __init ar934x_usb_setup(void)
+diff --git a/arch/mips/include/asm/mach-ath79/ar71xx_regs.h b/arch/mips/include/asm/mach-ath79/ar71xx_regs.h
+index a5e0f17..13eb2d9 100644
 --- a/arch/mips/include/asm/mach-ath79/ar71xx_regs.h
 +++ b/arch/mips/include/asm/mach-ath79/ar71xx_regs.h
-@@ -485,6 +485,7 @@
+@@ -297,6 +297,7 @@
+ #define AR934X_RESET_USB_PHY		BIT(4)
+ #define AR934X_RESET_USBSUS_OVERRIDE	BIT(3)
  
- #define AR933X_BOOTSTRAP_MDIO_GPIO_EN	BIT(18)
- #define AR933X_BOOTSTRAP_EEPBUSY	BIT(4)
 +#define AR933X_BOOTSTRAP_USB_MODE_HOST	BIT(3)
  #define AR933X_BOOTSTRAP_REF_CLK_40	BIT(0)
  
  #define AR934X_BOOTSTRAP_SW_OPTION8	BIT(23)
-@@ -505,6 +506,8 @@
- 
- #define QCA955X_BOOTSTRAP_REF_CLK_40	BIT(4)
+@@ -315,6 +316,8 @@
+ #define AR934X_BOOTSTRAP_SDRAM_DISABLED	BIT(1)
+ #define AR934X_BOOTSTRAP_DDR1		BIT(0)
  
 +#define AR933X_USB_CONFIG_HOST_ONLY	BIT(8)
 +
  #define AR934X_PCIE_WMAC_INT_WMAC_MISC		BIT(0)
  #define AR934X_PCIE_WMAC_INT_WMAC_TX		BIT(1)
  #define AR934X_PCIE_WMAC_INT_WMAC_RXLP		BIT(2)
+diff --git a/arch/mips/include/asm/mach-ath79/ar933x_chipidea_platform.h b/arch/mips/include/asm/mach-ath79/ar933x_chipidea_platform.h
+new file mode 100644
+index 0000000..a58fd0a
+--- /dev/null
++++ b/arch/mips/include/asm/mach-ath79/ar933x_chipidea_platform.h
+@@ -0,0 +1,18 @@
++/*
++ *  Platform data definition for Atheros AR933X Chipidea USB controller
++ *
++ *  This program is free software; you can redistribute it and/or modify it
++ *  under the terms of the GNU General Public License version 2 as published
++ *  by the Free Software Foundation.
++ */
++
++#ifndef _AR933X_CHIPIDEA_PLATFORM_H
++#define _AR933X_CHIPIDEA_PLATFORM_H
++
++#include <linux/usb/otg.h>
++
++struct ar933x_usb_platform_data {
++	usb_dr_mode dr_mode;
++};
++
++#endif /* _AR933X_UART_PLATFORM_H */
+diff --git a/arch/mips/include/asm/mach-ath79/ar933x_uart_platform.h b/arch/mips/include/asm/mach-ath79/ar933x_uart_platform.h
+index 6cb30f2..47af98e 100644
+--- a/arch/mips/include/asm/mach-ath79/ar933x_uart_platform.h
++++ b/arch/mips/include/asm/mach-ath79/ar933x_uart_platform.h
+@@ -11,6 +11,8 @@
+ #ifndef _AR933X_UART_PLATFORM_H
+ #define _AR933X_UART_PLATFORM_H
+ 
++#include <linux/usb/otg.h>
++
+ struct ar933x_uart_platform_data {
+ 	unsigned	uartclk;
+ };
+diff --git a/drivers/usb/chipidea/Makefile b/drivers/usb/chipidea/Makefile
+index d92ca32..4fb1557 100644
 --- a/drivers/usb/chipidea/Makefile
 +++ b/drivers/usb/chipidea/Makefile
-@@ -10,6 +10,7 @@ ci_hdrc-$(CONFIG_USB_CHIPIDEA_DEBUG)	+=
- # Glue/Bridge layers go here
- 
- obj-$(CONFIG_USB_CHIPIDEA)	+= ci13xxx_msm.o
-+obj-$(CONFIG_USB_CHIPIDEA)	+= ci13xxx_ar933x.o
- 
- # PCI doesn't provide stubs, need to check
- ifneq ($(CONFIG_PCI),)
+@@ -19,3 +19,8 @@ endif
+ ifneq ($(CONFIG_OF_DEVICE),)
+ 	obj-$(CONFIG_USB_CHIPIDEA)	+= ci13xxx_imx.o usbmisc_imx6q.o
+ endif
++
++ifneq ($(CONFIG_SOC_AR933X),)
++	obj-$(CONFIG_USB_CHIPIDEA)	+= ci13xxx_ar933x.o
++endif
++
+diff --git a/drivers/usb/chipidea/ci13xxx_ar933x.c b/drivers/usb/chipidea/ci13xxx_ar933x.c
+new file mode 100644
+index 0000000..6d7c91a
 --- /dev/null
 +++ b/drivers/usb/chipidea/ci13xxx_ar933x.c
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,74 @@
 +/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
 + *
 + * This program is free software; you can redistribute it and/or modify
@@ -48,28 +173,29 @@
 +
 +#include "ci.h"
 +
-+static struct ci13xxx_platform_data ci13xxx_ar933x_platdata = {
-+	.name			= "ci13xxx_ar933x",
-+	.flags			= 0,
-+	.capoffset		= DEF_CAPOFFSET
-+};
-+
-+static int __devinit ci13xxx_ar933x_probe(struct platform_device *pdev)
++static int ci13xxx_ar933x_probe(struct platform_device *pdev)
 +{
 +	u32 bootstrap;
++	struct ar933x_chipidea_platform_data *ar933x_chipidea_data;
++	struct ci13xxx_platform_data *pdata;
 +	struct platform_device *plat_ci;
 +
 +	dev_dbg(&pdev->dev, "ci13xxx_ar933x_probe\n");
 +
-+	bootstrap = ath79_reset_rr(AR933X_RESET_REG_BOOTSTRAP);
-+	if (bootstrap & AR933X_BOOTSTRAP_USB_MODE_HOST)
-+		ci13xxx_ar933x_platdata.flags = CI13XXX_FORCE_HOST_MODE;
-+	else
-+		ci13xxx_ar933x_platdata.flags = CI13XXX_FORCE_DEVICE_MODE;
++	ar933x_chipidea_data = pdef->platform_data;
 +
++	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
++	if (!pdata) {
++		dev_err(&pdev->dev, "Failed to allocate ci13xxx-ar933x pdata!\n");
++		return -ENOMEM;
++	}
++
++	pdata->name = "ci13xxx_ar933x";
++	pdata->capoffset = DEF_CAPOFFSET;
++	pdata->dr_mode = ar933x_chipidea_data.dr_mode;
 +	plat_ci = ci13xxx_add_device(&pdev->dev,
 +				pdev->resource, pdev->num_resources,
-+				&ci13xxx_ar933x_platdata);
++				pdata);
 +	if (IS_ERR(plat_ci)) {
 +		dev_err(&pdev->dev, "ci13xxx_add_device failed!\n");
 +		return PTR_ERR(plat_ci);
@@ -83,7 +209,7 @@
 +	return 0;
 +}
 +
-+static int __devexit ci13xxx_ar933x_remove(struct platform_device *pdev)
++static int ci13xxx_ar933x_remove(struct platform_device *pdev)
 +{
 +	struct platform_device *plat_ci = platform_get_drvdata(pdev);
 +
@@ -95,17 +221,19 @@
 +
 +static struct platform_driver ci13xxx_ar933x_driver = {
 +	.probe = ci13xxx_ar933x_probe,
-+	.remove = __devexit_p(ci13xxx_ar933x_remove),
-+	.driver = { .name = "ehci-platform", },
++	.remove = __ci13xxx_ar933x_remove,
++	.driver = { .name = "ar933x-chipidea", },
 +};
 +
 +module_platform_driver(ci13xxx_ar933x_driver);
 +
-+MODULE_ALIAS("platform:ar933x_hsusb");
++MODULE_ALIAS("platform:ci13xxx_ar933x_driver");
 +MODULE_LICENSE("GPL v2");
+diff --git a/drivers/usb/chipidea/core.c b/drivers/usb/chipidea/core.c
+index aebf695..c6f0319 100644
 --- a/drivers/usb/chipidea/core.c
 +++ b/drivers/usb/chipidea/core.c
-@@ -181,7 +181,7 @@ static int hw_device_init(struct ci13xxx
+@@ -181,7 +181,7 @@ static int hw_device_init(struct ci13xxx *ci, void __iomem *base)
  
  	ci->hw_bank.cap = ci->hw_bank.abs;
  	ci->hw_bank.cap += ci->platdata->capoffset;
@@ -114,16 +242,15 @@
  
  	hw_alloc_regmap(ci, false);
  	reg = hw_read(ci, CAP_HCCPARAMS, HCCPARAMS_LEN) >>
-@@ -398,6 +398,8 @@ static int __devinit ci_hdrc_probe(struc
+@@ -398,6 +398,7 @@ static int ci_hdrc_probe(struct platform_device *pdev)
  	struct resource	*res;
  	void __iomem	*base;
  	int		ret;
-+	bool force_host_mode;
-+	bool force_device_mode;
++	enum usb_dr_mode dr_mode;
  
  	if (!dev->platform_data) {
  		dev_err(dev, "platform data missing\n");
-@@ -411,7 +413,7 @@ static int __devinit ci_hdrc_probe(struc
+@@ -411,7 +412,7 @@ static int ci_hdrc_probe(struct platform_device *pdev)
  	}
  
  	base = devm_request_and_ioremap(dev, res);
@@ -132,46 +259,63 @@
  		dev_err(dev, "can't request and ioremap resource\n");
  		return -ENOMEM;
  	}
-@@ -459,21 +461,31 @@ static int __devinit ci_hdrc_probe(struc
- 	if (ret)
- 		dev_info(dev, "doesn't support gadget\n");
+@@ -450,14 +451,22 @@ static int ci_hdrc_probe(struct platform_device *pdev)
+ 		return -ENODEV;
+ 	}
  
--	if (!ci->roles[CI_ROLE_HOST] && !ci->roles[CI_ROLE_GADGET]) {
-+	force_host_mode = ci->platdata->flags & CI13XXX_FORCE_HOST_MODE;
-+	force_device_mode = ci->platdata->flags & CI13XXX_FORCE_DEVICE_MODE;
-+	if ((!ci->roles[CI_ROLE_HOST] && !ci->roles[CI_ROLE_GADGET]) ||
-+			(force_host_mode && !ci->roles[CI_ROLE_HOST]) ||
-+			(force_device_mode && !ci->roles[CI_ROLE_GADGET])) {
++	dr_mode = ci->platdata->dr_mode;
++	if (dr_mode == USB_DR_MODE_UNKNOWN)
++		dr_mode = USB_DR_MODE_OTG;
++
+ 	/* initialize role(s) before the interrupt is requested */
+-	ret = ci_hdrc_host_init(ci);
+-	if (ret)
+-		dev_info(dev, "doesn't support host\n");
++	if (dr_mode == USB_DR_MODE_OTG || dr_mode == USB_DR_MODE_HOST) {
++		ret = ci_hdrc_host_init(ci);
++		if (ret)
++			dev_info(dev, "doesn't support host\n");
++	}
+ 
+-	ret = ci_hdrc_gadget_init(ci);
+-	if (ret)
+-		dev_info(dev, "doesn't support gadget\n");
++	if (dr_mode == USB_DR_MODE_OTG || dr_mode == USB_DR_MODE_PERIPHERAL) {
++		ret = ci_hdrc_gadget_init(ci);
++		if (ret)
++			dev_info(dev, "doesn't support gadget\n");
++	}
+ 
+ 	if (!ci->roles[CI_ROLE_HOST] && !ci->roles[CI_ROLE_GADGET]) {
  		dev_err(dev, "no supported roles\n");
- 		ret = -ENODEV;
- 		goto rm_wq;
- 	}
- 
--	if (ci->roles[CI_ROLE_HOST] && ci->roles[CI_ROLE_GADGET]) {
-+	if (!force_host_mode && !force_device_mode &&
-+			ci->roles[CI_ROLE_HOST] && ci->roles[CI_ROLE_GADGET]) {
- 		ci->is_otg = true;
- 		/* ID pin needs 1ms debouce time, we delay 2ms for safe */
- 		mdelay(2);
- 		ci->role = ci_otg_role(ci);
- 	} else {
--		ci->role = ci->roles[CI_ROLE_HOST]
--			? CI_ROLE_HOST
--			: CI_ROLE_GADGET;
-+		if (force_host_mode)
-+			ci->role = CI_ROLE_HOST;
-+		else if (force_device_mode)
-+			ci->role = CI_ROLE_GADGET;
-+		else
-+			ci->role = ci->roles[CI_ROLE_HOST]
-+				? CI_ROLE_HOST
-+				: CI_ROLE_GADGET;
- 	}
- 
- 	ret = ci_role_start(ci, ci->role);
+diff --git a/drivers/usb/chipidea/udc.c b/drivers/usb/chipidea/udc.c
+index 2f45bba..63c2d80 100644
 --- a/drivers/usb/chipidea/udc.c
 +++ b/drivers/usb/chipidea/udc.c
-@@ -432,10 +432,10 @@ static int _hardware_enqueue(struct ci13
+@@ -307,14 +307,18 @@ static u32 hw_test_and_clear_intr_active(struct ci13xxx *ci)
+ 
+ static void hw_enable_vbus_intr(struct ci13xxx *ci)
+ {
+-	hw_write(ci, OP_OTGSC, OTGSC_AVVIS, OTGSC_AVVIS);
+-	hw_write(ci, OP_OTGSC, OTGSC_AVVIE, OTGSC_AVVIE);
+-	queue_work(ci->wq, &ci->vbus_work);
++	if (ci->is_otg) {
++		hw_write(ci, OP_OTGSC, OTGSC_AVVIS, OTGSC_AVVIS);
++		hw_write(ci, OP_OTGSC, OTGSC_AVVIE, OTGSC_AVVIE);
++		queue_work(ci->wq, &ci->vbus_work);
++	}
+ }
+ 
+ static void hw_disable_vbus_intr(struct ci13xxx *ci)
+ {
+-	hw_write(ci, OP_OTGSC, OTGSC_AVVIE, 0);
++	if (ci->is_otg) {
++		hw_write(ci, OP_OTGSC, OTGSC_AVVIE, 0);
++	}
+ }
+ 
+ /**
+@@ -432,10 +436,10 @@ static int _hardware_enqueue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
  			return -ENOMEM;
  
  		memset(mReq->zptr, 0, sizeof(*mReq->zptr));
@@ -185,7 +329,7 @@
  	}
  	ret = usb_gadget_map_request(&ci->gadget, &mReq->req, mEp->dir);
  	if (ret)
-@@ -446,32 +446,35 @@ static int _hardware_enqueue(struct ci13
+@@ -446,32 +450,35 @@ static int _hardware_enqueue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
  	 * TODO - handle requests which spawns into several TDs
  	 */
  	memset(mReq->ptr, 0, sizeof(*mReq->ptr));
@@ -233,7 +377,7 @@
  		wmb();
  		if (hw_read(ci, OP_ENDPTPRIME, BIT(n)))
  			goto done;
-@@ -485,9 +488,9 @@ static int _hardware_enqueue(struct ci13
+@@ -485,9 +492,9 @@ static int _hardware_enqueue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
  	}
  
  	/*  QH configuration */
@@ -246,7 +390,7 @@
  
  	wmb();   /* synchronize before ep prime */
  
-@@ -509,11 +512,11 @@ static int _hardware_dequeue(struct ci13
+@@ -509,11 +516,11 @@ static int _hardware_dequeue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
  	if (mReq->req.status != -EALREADY)
  		return -EINVAL;
  
@@ -260,7 +404,7 @@
  			return -EBUSY;
  		dma_pool_free(mEp->td_pool, mReq->zptr, mReq->zdma);
  		mReq->zptr = NULL;
-@@ -523,7 +526,7 @@ static int _hardware_dequeue(struct ci13
+@@ -523,7 +530,7 @@ static int _hardware_dequeue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
  
  	usb_gadget_unmap_request(&mEp->ci->gadget, &mReq->req, mEp->dir);
  
@@ -269,7 +413,7 @@
  	if ((TD_STATUS_HALTED & mReq->req.status) != 0)
  		mReq->req.status = -1;
  	else if ((TD_STATUS_DT_ERR & mReq->req.status) != 0)
-@@ -531,7 +534,7 @@ static int _hardware_dequeue(struct ci13
+@@ -531,7 +538,7 @@ static int _hardware_dequeue(struct ci13xxx_ep *mEp, struct ci13xxx_req *mReq)
  	else if ((TD_STATUS_TR_ERR & mReq->req.status) != 0)
  		mReq->req.status = -1;
  
@@ -278,7 +422,7 @@
  	mReq->req.actual >>= ffs_nr(TD_TOTAL_BYTES);
  	mReq->req.actual   = mReq->req.length - mReq->req.actual;
  	mReq->req.actual   = mReq->req.status ? 0 : mReq->req.actual;
-@@ -801,7 +804,7 @@ __acquires(mEp->lock)
+@@ -801,7 +808,7 @@ __acquires(mEp->lock)
  		if (retval < 0)
  			break;
  		list_del_init(&mReq->queue);
@@ -287,7 +431,7 @@
  		if (mReq->req.complete != NULL) {
  			spin_unlock(mEp->lock);
  			if ((mEp->type == USB_ENDPOINT_XFER_CONTROL) &&
-@@ -1045,15 +1048,15 @@ static int ep_enable(struct usb_ep *ep,
+@@ -1045,15 +1052,15 @@ static int ep_enable(struct usb_ep *ep,
  	mEp->qh.ptr->cap = 0;
  
  	if (mEp->type == USB_ENDPOINT_XFER_CONTROL)
@@ -308,29 +452,7 @@
  
  	/*
  	 * Enable endpoints in the HW other than ep0 as ep0
-@@ -1392,7 +1395,10 @@ static int ci13xxx_vbus_session(struct u
- 		if (is_active) {
- 			pm_runtime_get_sync(&_gadget->dev);
- 			hw_device_reset(ci, USBMODE_CM_DC);
--			hw_enable_vbus_intr(ci);
-+
-+			if (ci->is_otg)
-+				hw_enable_vbus_intr(ci);
-+
- 			hw_device_state(ci, ci->ep0out->qh.dma);
- 		} else {
- 			hw_device_state(ci, 0);
-@@ -1569,7 +1575,8 @@ static int ci13xxx_start(struct usb_gadg
- 		if (ci->vbus_active) {
- 			if (ci->platdata->flags & CI13XXX_REGS_SHARED) {
- 				hw_device_reset(ci, USBMODE_CM_DC);
--				hw_enable_vbus_intr(ci);
-+				if (ci->is_otg)
-+					hw_enable_vbus_intr(ci);
- 			}
- 		} else {
- 			pm_runtime_put_sync(&ci->gadget.dev);
-@@ -1677,11 +1684,13 @@ static irqreturn_t udc_irq(struct ci13xx
+@@ -1677,11 +1684,13 @@ static irqreturn_t udc_irq(struct ci13xxx *ci)
  		retval = IRQ_NONE;
  	}
  
@@ -348,34 +470,32 @@
  
  	spin_unlock(&ci->lock);
  
-@@ -1758,7 +1767,8 @@ static int udc_start(struct ci13xxx *ci)
- 		retval = hw_device_reset(ci, USBMODE_CM_DC);
- 		if (retval)
- 			goto put_transceiver;
--		hw_enable_vbus_intr(ci);
-+		if (ci->is_otg)
-+			hw_enable_vbus_intr(ci);
- 	}
- 
- 	retval = device_register(&ci->gadget.dev);
-@@ -1821,7 +1831,8 @@ static void udc_stop(struct ci13xxx *ci)
- 	if (ci == NULL)
- 		return;
- 
--	hw_disable_vbus_intr(ci);
-+	if (ci->is_otg)
-+		hw_disable_vbus_intr(ci);
- 	cancel_work_sync(&ci->vbus_work);
- 
- 	usb_del_gadget_udc(&ci->gadget);
+diff --git a/include/linux/usb/chipidea.h b/include/linux/usb/chipidea.h
+index 544825d..5c58d7c 100644
 --- a/include/linux/usb/chipidea.h
 +++ b/include/linux/usb/chipidea.h
-@@ -19,6 +19,8 @@ struct ci13xxx_platform_data {
+@@ -19,7 +19,7 @@ struct ci13xxx_platform_data {
  #define CI13XXX_REQUIRE_TRANSCEIVER	BIT(1)
  #define CI13XXX_PULLUP_ON_VBUS		BIT(2)
  #define CI13XXX_DISABLE_STREAMING	BIT(3)
-+#define CI13XXX_FORCE_HOST_MODE		BIT(5)
-+#define CI13XXX_FORCE_DEVICE_MODE	BIT(6)
- 
+-
++	enum usb_dr_mode dr_mode;
  #define CI13XXX_CONTROLLER_RESET_EVENT		0
  #define CI13XXX_CONTROLLER_STOPPED_EVENT	1
+ 	void	(*notify_event) (struct ci13xxx *ci, unsigned event);
+diff --git a/include/linux/usb/otg.h b/include/linux/usb/otg.h
+index e8a5fe8..7ce6334 100644
+--- a/include/linux/usb/otg.h
++++ b/include/linux/usb/otg.h
+@@ -99,4 +99,11 @@ otg_start_srp(struct usb_otg *otg)
+ /* for OTG controller drivers (and maybe other stuff) */
+ extern int usb_bus_start_enum(struct usb_bus *bus, unsigned port_num);
+ 
++enum usb_dr_mode {
++       USB_DR_MODE_UNKNOWN,
++       USB_DR_MODE_HOST,
++       USB_DR_MODE_PERIPHERAL,
++       USB_DR_MODE_OTG,
++};
++
+ #endif /* __LINUX_USB_OTG_H */
