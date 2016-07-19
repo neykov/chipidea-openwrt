@@ -248,7 +248,7 @@ define KernelPackage/usb-eth-gadget
 	$(LINUX_DIR)/drivers/usb/gadget/function/usb_f_ecm_subset.ko \
 	$(LINUX_DIR)/drivers/usb/gadget/function/usb_f_rndis.ko \
 	$(LINUX_DIR)/drivers/usb/gadget/legacy/g_ether.ko
-  AUTOLOAD:=$(call AutoLoad,52,usb_f_ecm g_ether)
+#  AUTOLOAD:=$(call AutoLoad,52,usb_f_ecm g_ether)
   $(call AddDepends/usb)
 endef
 
@@ -269,7 +269,7 @@ define KernelPackage/usb-serial-gadget
 	$(LINUX_DIR)/drivers/usb/gadget/function/usb_f_obex.ko \
 	$(LINUX_DIR)/drivers/usb/gadget/function/usb_f_serial.ko \
 	$(LINUX_DIR)/drivers/usb/gadget/legacy/g_serial.ko
-  AUTOLOAD:=$(call AutoLoad,52,usb_f_acm g_serial)
+#  AUTOLOAD:=$(call AutoLoad,52,usb_f_acm g_serial)
   $(call AddDepends/usb)
 endef
 
@@ -286,7 +286,7 @@ define KernelPackage/usb-mass-storage-gadget
   FILES:= \
 	$(LINUX_DIR)/drivers/usb/gadget/function/usb_f_mass_storage.ko \
 	$(LINUX_DIR)/drivers/usb/gadget/legacy/g_mass_storage.ko
-  AUTOLOAD:=$(call AutoLoad,52,usb_f_mass_storage g_mass_storage)
+#  AUTOLOAD:=$(call AutoLoad,52,usb_f_mass_storage g_mass_storage)
   $(call AddDepends/usb)
 endef
 
@@ -295,7 +295,6 @@ define KernelPackage/usb-mass-storage-gadget/description
 endef
 
 $(eval $(call KernelPackage,usb-mass-storage-gadget))
-
 
 define KernelPackage/usb-uhci
   TITLE:=Support for UHCI controllers
@@ -1542,8 +1541,32 @@ endef
 $(eval $(call KernelPackage,usbip-server))
 
 
+define KernelPackage/usb-chipidea
+  TITLE:=Host and device support for ChipIdea controllers
+  DEPENDS:=+kmod-extcon +USB_GADGET_SUPPORT:kmod-usb-gadget
+  KCONFIG:=\
+        CONFIG_NOP_USB_XCEIV=y \
+        CONFIG_EXTCON \
+	CONFIG_USB_CHIPIDEA \
+	CONFIG_USB_CHIPIDEA_HOST=y \
+	CONFIG_USB_CHIPIDEA_UDC=y \
+	CONFIG_USB_CHIPIDEA_DEBUG=y
+  FILES:=\
+	$(LINUX_DIR)/drivers/extcon/extcon.ko \
+	$(LINUX_DIR)/drivers/usb/chipidea/ci_hdrc.ko
+  AUTOLOAD:=$(call AutoLoad,51,ci_hdrc,0)
+  $(call AddDepends/usb)
+endef
+
+define KernelPackage/usb-chipidea/description
+ Kernel support for USB ChipIdea controllers
+endef
+
+$(eval $(call KernelPackage,usb-chipidea))
+
+
 define KernelPackage/usb-chipidea-imx
-  TITLE:=Support for ChipIdea controllers
+  TITLE:=Support for ChipIdea controllers on IMX boards
   DEPENDS:=@TARGET_imx6||TARGET_mxs +kmod-usb2 +USB_GADGET_SUPPORT:kmod-usb-gadget
   KCONFIG:=\
 	CONFIG_USB_CHIPIDEA \
